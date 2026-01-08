@@ -1,0 +1,10 @@
+LineId,Time,Component,Level,Content
+1,2024-01-15T10:30:00Z,DnsApi,Error,DNS resolution failed for domain example.com: timeout after 5 seconds
+2,2024-01-15T10:31:00Z,Workstation,Warning,Service registration failed: unable to connect to registry
+3,2024-01-15T10:32:00Z,DnsApi,Error,DNS resolution failed for domain example.com: timeout after 5 seconds
+4,2024-01-15T10:33:00Z,Workstation,Info,Service started successfully
+5,2024-01-15T10:34:00Z,Workstation,Error,Authentication failed: invalid credentials for user admin
+6,2024-01-15T10:35:00Z,DnsApi,Error,DNS resolution failed for domain example.com: timeout after 5 seconds
+7,2024-01-15T10:36:00Z,Workstation,Warning,Service registration failed: unable to connect to registry
+8,2024-01-15T10:37:00Z,Workstation,Error,Authentication failed: invalid credentials for user admin
+
