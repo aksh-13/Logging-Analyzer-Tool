@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@aws-sdk/client-lambda": "^3.965.0",
     "@google/generative-ai": "^0.21.0",
     "@heroui/react": "^2.4.0",
     "@heroui/theme": "^2.4.0",

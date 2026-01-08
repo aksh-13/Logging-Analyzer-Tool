@@ -45,6 +45,29 @@ A high-performance log analysis dashboard that uses Google Gemini AI to transfor
 4. **Open Browser**:
    Navigate to [http://localhost:3000](http://localhost:3000)
 
+## AWS Lambda Deployment (Optional)
+
+To enable the serverless backend:
+
+1.  **Deploy the Lambda**:
+    *   Navigate to the `lambda/` directory.
+    *   Run `npm install`.
+    *   Zip the contents (`index.mjs`, `package.json`, `node_modules`).
+    *   Create an AWS Lambda function (Node.js 18.x/20.x).
+    *   Upload the zip file.
+    *   Set the Request Timeout to 30 seconds.
+
+2.  **Configure App**:
+    Add these to your `.env.local`:
+    ```env
+    AWS_REGION=us-east-1
+    AWS_ACCESS_KEY_ID=your_access_key
+    AWS_SECRET_ACCESS_KEY=your_secret_key
+    AWS_LAMBDA_FUNCTION_NAME=your_function_name
+    ```
+
+    *If these are missing, the app defaults to local processing.*
+
 ## CSV Format
 
 The application expects CSV files with the following columns:

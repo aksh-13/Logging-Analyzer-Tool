@@ -1,0 +1,9 @@
+{
+    "name": "log-analyzer-lambda",
+    "version": "1.0.0",
+    "description": "AWS Lambda function for LogInsight AI",
+    "main": "index.mjs",
+    "dependencies": {
+        "@google/generative-ai": "^0.21.0"
+    }
+}
