@@ -74,8 +74,8 @@ export async function analyzeLogDigest(digest: LogDigest[]): Promise<AISummary[]
     console.log(`[Analysis] Running locally (Server Action)`);
 
     const genAI = new GoogleGenerativeAI(API_KEY);
-    // Fallback to gemini-pro (stable GA model) if 1.5 is not available
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+    // gemini-2.5-flash - works with this API key (billing enabled for higher limits)
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
     // Create a minimal, human-readable digest for Gemini
     const digestText = digest
@@ -106,44 +106,65 @@ ${digestText}
 
 Return ONLY the JSON array, no additional text or markdown formatting.`;
 
-    try {
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+    // Retry logic for rate limits
+    const maxRetries = 3;
+    let lastError: Error | null = null;
 
-      // Extract JSON from response
-      let jsonText = text.trim();
-      if (jsonText.startsWith('```json')) {
-        jsonText = jsonText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
-      } else if (jsonText.startsWith('```')) {
-        jsonText = jsonText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        // Extract JSON from response
+        let jsonText = text.trim();
+        if (jsonText.startsWith('```json')) {
+          jsonText = jsonText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+        } else if (jsonText.startsWith('```')) {
+          jsonText = jsonText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+        }
+
+        const aiResponses = JSON.parse(jsonText) as Array<{
+          index: number;
+          humanMeaning: string;
+          severityScore: number;
+        }>;
+
+        // Map AI responses back to digest patterns
+        const summaries: AISummary[] = digest.map((_, idx) => {
+          const aiResponse = aiResponses.find((r) => r.index === idx + 1) || {
+            index: idx + 1,
+            humanMeaning: 'Analysis pending...',
+            severityScore: 5,
+          };
+
+          return {
+            humanMeaning: aiResponse.humanMeaning,
+            severityScore: Math.max(1, Math.min(10, aiResponse.severityScore)),
+          };
+        });
+
+        return summaries;
+      } catch (error: any) {
+        lastError = error;
+        console.error(`[Gemini] Attempt ${attempt + 1}/${maxRetries} failed:`, error.message);
+
+        // Check if it's a rate limit error (429)
+        if (error.status === 429 || error.message?.includes('429') || error.message?.includes('Too Many Requests')) {
+          const retryDelay = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+          console.log(`[Gemini] Rate limited. Waiting ${retryDelay / 1000}s before retry...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          continue;
+        }
+
+        // For non-rate-limit errors, don't retry
+        break;
       }
-
-      const aiResponses = JSON.parse(jsonText) as Array<{
-        index: number;
-        humanMeaning: string;
-        severityScore: number;
-      }>;
-
-      // Map AI responses back to digest patterns
-      const summaries: AISummary[] = digest.map((_, idx) => {
-        const aiResponse = aiResponses.find((r) => r.index === idx + 1) || {
-          index: idx + 1,
-          humanMeaning: 'Analysis pending...',
-          severityScore: 5,
-        };
-
-        return {
-          humanMeaning: aiResponse.humanMeaning,
-          severityScore: Math.max(1, Math.min(10, aiResponse.severityScore)),
-        };
-      });
-
-      return summaries;
-    } catch (error) {
-      console.error('Error analyzing log digest with Gemini:', error);
-      throw new Error('Failed to analyze log digest locally.');
     }
+
+    // If all retries failed
+    console.error('Error analyzing log digest with Gemini:', lastError);
+    throw new Error(`Failed to analyze log digest: ${lastError?.message || 'Unknown error'}. You may have hit your daily API quota - try again later.`);
   } catch (error) {
     console.error('[Server Action Error] analyzeLogDigest failed:', error);
     throw error;

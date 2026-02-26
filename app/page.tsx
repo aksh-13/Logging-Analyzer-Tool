@@ -1,12 +1,66 @@
 'use client';
 
-import { useState } from 'react';
-import { Card, Chip, Spinner, Alert, Accordion, AccordionItem, Input } from '@heroui/react';
+import { useState, useCallback } from 'react';
+import { Collapse, Tag, Tooltip } from 'antd';
+import {
+  DashboardOutlined,
+  UploadOutlined,
+  BarChartOutlined,
+  FileTextOutlined,
+  CheckCircleFilled,
+  LoadingOutlined,
+  ExclamationCircleFilled,
+  CloseOutlined,
+  CaretRightOutlined,
+} from '@ant-design/icons';
 import { parseCSV } from '@/utils/csvParser';
 import { processLogs, calculateStats } from '@/lib/log-processor';
 import { analyzeLogDigest } from '@/app/actions/analyzeLogDigest';
 import { LogEntry, AnalyzedLogPattern, LogFormat } from '@/types/logs';
 
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Library: Ant Design (antd)
+   Aesthetic: Retro terminal / CRT monitor
+   — Sharp corners, monospace labels, electric
+   green primary, amber warnings, red errors,
+   CRT scanline overlay, blinking cursors.
+   Looks nothing like shadcn/NextUI/HeroUI.
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+// ── Progress Steps ──
+function TerminalProgress({ status }: { status: string }) {
+  const steps = [
+    { id: 'parsing', label: 'PARSE_CSV' },
+    { id: 'processing', label: 'PROCESS_LOGS' },
+    { id: 'analyzing', label: 'AI_ANALYZE' },
+    { id: 'complete', label: 'COMPLETE' },
+  ];
+
+  const currentIdx = steps.findIndex((s) => s.id === status);
+
+  return (
+    <div style={{ padding: '20px' }}>
+      {steps.map((step, idx) => {
+        const isDone = idx < currentIdx;
+        const isActive = idx === currentIdx;
+        const cls = isDone ? 'step-done' : isActive ? 'step-active' : '';
+        return (
+          <div key={step.id} className={`lv-progress-step ${cls}`}>
+            <div className="lv-progress-pip" />
+            <span>
+              {isDone && '✓ '}
+              {isActive && '▶ '}
+              {step.label}
+              {isActive && <span style={{ animation: 'blink 1s step-end infinite' }}> _</span>}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Main page ──
 export default function Home() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'parsing' | 'processing' | 'analyzing' | 'complete'>('idle');
@@ -16,6 +70,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [severityFilter, setSeverityFilter] = useState<number | null>(null);
   const [detectedFormat, setDetectedFormat] = useState<LogFormat>('auto');
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -28,40 +83,30 @@ export default function Home() {
     setStatus('parsing');
 
     try {
-      // Step 1: Parse CSV (auto-detects format)
-      setStatus('parsing');
       const parsedLogs = await parseCSV(file, 'auto');
       setLogs(parsedLogs);
-      
-      // Detect format from first log entry
+
       if (parsedLogs.length > 0) {
         const source = parsedLogs[0].source || 'unknown';
         const formatMap: Record<string, LogFormat> = {
-          'Windows': 'windows',
-          'Linux': 'linux-syslog',
-          'Apache': 'apache',
-          'Hadoop': 'hadoop',
-          'Spark': 'spark',
-          'OpenSSH': 'openssh',
+          Windows: 'windows', Linux: 'linux-syslog', Apache: 'apache',
+          Hadoop: 'hadoop', Spark: 'spark', OpenSSH: 'openssh',
         };
         setDetectedFormat(formatMap[source] || 'auto');
       }
 
-      // Step 2: Pre-aggregate locally (client-side)
       setStatus('processing');
-      await new Promise((resolve) => setTimeout(resolve, 100)); // Small delay for UI update
+      await new Promise((r) => setTimeout(r, 100));
       const digest = processLogs(parsedLogs);
       const calculatedStats = calculateStats(parsedLogs);
       setStats(calculatedStats);
 
-      // Step 3: Send only the digest to AI (minimal payload)
       setStatus('analyzing');
       const aiSummaries = await analyzeLogDigest(digest);
 
-      // Step 4: Combine digest with AI summaries
       const patterns: AnalyzedLogPattern[] = digest.map((d, idx) => ({
         ...d,
-        humanMeaning: aiSummaries[idx]?.humanMeaning || 'Analysis pending...',
+        humanMeaning: aiSummaries[idx]?.humanMeaning || 'Awaiting analysis...',
         severityScore: aiSummaries[idx]?.severityScore || 5,
         totalOccurrences: d.frequency,
       }));
@@ -69,8 +114,7 @@ export default function Home() {
       setAnalyzedPatterns(patterns);
       setStatus('complete');
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to process file';
-      setError(errorMessage);
+      setError(err instanceof Error ? err.message : 'Processing failed');
       setStatus('idle');
     } finally {
       setLoading(false);
@@ -78,248 +122,387 @@ export default function Home() {
     }
   };
 
-  const getLevelColor = (level: string): 'danger' | 'warning' | 'primary' => {
-    if (level === 'Error') return 'danger';
-    if (level === 'Warning') return 'warning';
-    return 'primary';
-  };
+  const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); }, []);
+  const handleDragLeave = useCallback(() => { setIsDragging(false); }, []);
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file && file.name.endsWith('.csv')) {
+      const input = document.getElementById('file-upload') as HTMLInputElement;
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }, []);
 
-  const getSeverityColor = (score: number): 'danger' | 'warning' | 'success' | 'default' => {
-    if (score >= 8) return 'danger';
-    if (score >= 5) return 'warning';
-    if (score >= 3) return 'success';
-    return 'default';
-  };
+  const getSevClass = (score: number) => score >= 8 ? 'lv-sev-crit' : score >= 5 ? 'lv-sev-warn' : 'lv-sev-info';
+  const getLevelClass = (level: string) => level === 'Error' ? 'lv-level-error' : level === 'Warning' ? 'lv-level-warning' : 'lv-level-info';
 
   const filteredPatterns = severityFilter !== null
     ? analyzedPatterns.filter((p) => p.severityScore >= severityFilter)
     : analyzedPatterns;
 
-  const statusMessages = {
-    idle: 'Ready to upload',
-    parsing: 'Parsing CSV file...',
-    processing: 'Pre-aggregating logs (client-side)...',
-    analyzing: 'Analyzing with AI...',
-    complete: 'Analysis complete',
-  };
-
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Sidebar */}
-      <div className="fixed left-0 top-0 h-full w-64 bg-white border-r border-gray-200 shadow-sm">
-        <div className="p-6">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-2xl">📊</span>
-            <h2 className="text-xl font-bold text-gray-900">LogVision</h2>
-          </div>
-          <p className="text-sm text-gray-500">High-Efficiency Log Analyzer</p>
+    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--lv-bg)' }}>
+      {/* ════ Sidebar ════ */}
+      <aside className="lv-sidebar">
+        <div className="lv-sidebar-logo">
+          <h2>
+            {'>'} LogVision
+            <span className="logo-cursor" />
+          </h2>
+          <p>system log analyzer</p>
         </div>
-      </div>
 
-      {/* Main Content */}
-      <div className="ml-64">
+        <nav className="lv-nav">
+          <div className="lv-nav-item active">
+            <DashboardOutlined />
+            Dashboard
+          </div>
+          <div className="lv-nav-item">
+            <UploadOutlined />
+            Ingest
+          </div>
+          <div className="lv-nav-item">
+            <BarChartOutlined />
+            Patterns
+          </div>
+        </nav>
+
+        <div className="lv-sidebar-footer">
+          v1.0 &middot; gemini ai engine
+        </div>
+      </aside>
+
+      {/* ════ Main ════ */}
+      <div style={{ flex: 1, marginLeft: 220, position: 'relative', zIndex: 1 }}>
         {/* Header */}
-        <header className="bg-white border-b border-gray-200 px-8 py-6 shadow-sm">
-          <h1 className="text-2xl font-bold text-gray-900">Log Analysis Dashboard</h1>
-          {status !== 'idle' && (
-            <p className="text-sm text-gray-600 mt-1">{statusMessages[status]}</p>
-          )}
+        <header className="lv-header">
+          <h1 style={{ fontFamily: "'Space Grotesk', var(--font-heading), sans-serif" }}>
+            Log Analysis Dashboard
+          </h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {detectedFormat !== 'auto' && !loading && (
+              <span className="lv-format-badge">
+                fmt: {detectedFormat}
+              </span>
+            )}
+            <div className="lv-status">
+              <div className={`lv-status-dot ${loading ? 'active' : ''}`} />
+              <span style={{ color: loading ? 'var(--lv-amber)' : 'var(--lv-green-dim)' }}>
+                {loading ? 'PROCESSING' : 'IDLE'}
+              </span>
+            </div>
+          </div>
         </header>
 
         {/* Content */}
-        <main className="p-8 space-y-6">
-          {/* Upload Section */}
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold mb-4">Upload CSV Log File</h3>
-            <label
-              htmlFor="file-upload"
-              className={`flex flex-col items-center justify-center w-full h-48 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
-                loading
-                  ? 'border-gray-300 bg-gray-50 cursor-not-allowed'
-                  : 'border-gray-300 hover:border-primary hover:bg-primary-50'
-              }`}
-            >
-              <input
-                id="file-upload"
-                type="file"
-                accept=".csv"
-                onChange={handleFileUpload}
-                disabled={loading}
-                className="hidden"
-              />
-              <span className={`text-5xl mb-4 ${loading ? 'text-gray-400' : 'text-primary'}`}>📤</span>
-              <p className="text-sm font-medium text-gray-700 mb-1">
-                Click or drag CSV file to this area to upload
-              </p>
-              <p className="text-xs text-gray-500 text-center px-4">
-                Supports multiple log formats: Windows, Linux syslog, Apache, Hadoop, Spark, OpenSSH, OpenStack, HDFS, BGL, HPC, Mac, Proxifier, Thunderbird, and more. Auto-detects format from CSV headers.
-              </p>
-            </label>
-          </Card>
+        <main style={{ padding: '20px 24px' }}>
 
-          {/* Error Display */}
+          {/* Error */}
           {error && (
-            <Alert
-              color="danger"
-              title="Error"
-              description={error}
-              onClose={() => setError(null)}
-              className="mb-4"
-            />
-          )}
-
-          {/* Loading State */}
-          {loading && (
-            <Card className="p-12">
-              <div className="flex flex-col items-center justify-center">
-                <Spinner size="lg" color="primary" />
-                <p className="mt-4 text-gray-600">{statusMessages[status]}</p>
+            <div className="lv-error-panel" style={{ marginBottom: 16, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              <ExclamationCircleFilled style={{ color: 'var(--lv-red)', fontSize: 14, marginTop: 2 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{
+                  fontFamily: "'IBM Plex Mono', var(--font-mono), monospace",
+                  fontSize: 11,
+                  textTransform: 'uppercase' as const,
+                  letterSpacing: '0.06em',
+                  color: 'var(--lv-red)',
+                  fontWeight: 600,
+                  marginBottom: 4,
+                }}>
+                  ERROR
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--lv-text)', lineHeight: 1.5 }}>
+                  {error}
+                </div>
               </div>
-            </Card>
-          )}
-
-          {/* Detected Format */}
-          {detectedFormat !== 'auto' && !loading && (
-            <Alert
-              color="success"
-              title="Log Format Detected"
-              description={`Successfully parsed ${detectedFormat} format logs`}
-              className="mb-4"
-            />
-          )}
-
-          {/* Stats Overview */}
-          {stats && !loading && (
-            <div className="grid grid-cols-4 gap-4">
-              <Card className="p-6">
-                <div className="text-center">
-                  <h3 className="text-3xl font-bold text-primary mb-2">
-                    {stats.totalLogs.toLocaleString()}
-                  </h3>
-                  <p className="text-sm text-gray-600">Total Logs</p>
-                </div>
-              </Card>
-              <Card className="p-6">
-                <div className="text-center">
-                  <h3 className="text-3xl font-bold text-success mb-2">
-                    {stats.uniquePatterns.toLocaleString()}
-                  </h3>
-                  <p className="text-sm text-gray-600">Unique Patterns</p>
-                </div>
-              </Card>
-              <Card className="p-6">
-                <div className="text-center">
-                  <h3 className="text-3xl font-bold text-danger mb-2">
-                    {stats.errorCount.toLocaleString()}
-                  </h3>
-                  <p className="text-sm text-gray-600">Errors</p>
-                </div>
-              </Card>
-              <Card className="p-6">
-                <div className="text-center">
-                  <h3 className="text-3xl font-bold text-warning mb-2">
-                    {stats.warningCount.toLocaleString()}
-                  </h3>
-                  <p className="text-sm text-gray-600">Warnings</p>
-                </div>
-              </Card>
+              <CloseOutlined
+                onClick={() => setError(null)}
+                style={{ color: 'var(--lv-text-muted)', cursor: 'pointer', fontSize: 12 }}
+              />
             </div>
           )}
 
-          {/* Results with Accordion */}
+          {/* Upload */}
+          {!loading && status !== 'complete' && (
+            <div className="lv-panel" style={{ marginBottom: 20 }}>
+              <div className="lv-panel-header">
+                <span className="lv-panel-title">
+                  <FileTextOutlined style={{ marginRight: 8 }} />
+                  Upload Log File
+                </span>
+              </div>
+              <div style={{ padding: 20 }}>
+                <label
+                  htmlFor="file-upload"
+                  className={`lv-upload-zone ${isDragging ? 'dragging' : ''}`}
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
+                  <input
+                    id="file-upload"
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileUpload}
+                    disabled={loading}
+                    style={{ display: 'none' }}
+                  />
+                  <UploadOutlined className="lv-upload-icon" />
+                  <div style={{
+                    fontFamily: "'Space Grotesk', var(--font-heading), sans-serif",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: 'var(--lv-text)',
+                    marginBottom: 8,
+                  }}>
+                    {isDragging ? '[ DROP FILE ]' : '[ CLICK OR DROP CSV ]'}
+                  </div>
+                  <div style={{
+                    fontFamily: "'IBM Plex Mono', var(--font-mono), monospace",
+                    fontSize: 10,
+                    color: 'var(--lv-text-muted)',
+                    textTransform: 'uppercase' as const,
+                    letterSpacing: '0.04em',
+                    maxWidth: 480,
+                    textAlign: 'center' as const,
+                    lineHeight: 1.8,
+                  }}>
+                    Windows &middot; Linux &middot; Apache &middot; Hadoop &middot; Spark &middot; OpenSSH &middot; OpenStack &middot; HDFS &middot; BGL &middot; HPC &middot; Mac &middot; Thunderbird
+                  </div>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Loading */}
+          {loading && (
+            <div className="lv-panel" style={{ marginBottom: 20, display: 'flex' }}>
+              <div style={{ borderRight: '1px solid var(--lv-border)', minWidth: 200 }}>
+                <TerminalProgress status={status} />
+              </div>
+              <div style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="lv-shimmer" style={{ height: 36, animationDelay: `${i * 0.12}s` }} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Stats */}
+          {stats && !loading && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+              <div className="lv-stat-block stat-total">
+                <div className="lv-stat-label">total logs</div>
+                <div className="lv-stat-value val-total">{stats.totalLogs.toLocaleString()}</div>
+              </div>
+              <div className="lv-stat-block stat-patterns">
+                <div className="lv-stat-label">unique patterns</div>
+                <div className="lv-stat-value val-patterns">{stats.uniquePatterns.toLocaleString()}</div>
+              </div>
+              <div className="lv-stat-block stat-errors">
+                <div className="lv-stat-label">errors</div>
+                <div className="lv-stat-value val-errors">{stats.errorCount.toLocaleString()}</div>
+              </div>
+              <div className="lv-stat-block stat-warnings">
+                <div className="lv-stat-label">warnings</div>
+                <div className="lv-stat-value val-warnings">{stats.warningCount.toLocaleString()}</div>
+              </div>
+            </div>
+          )}
+
+          {/* Results */}
           {analyzedPatterns.length > 0 && !loading && (
-            <Card className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-semibold">AI-Analyzed Log Patterns</h3>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-600">Filter by Severity:</span>
-                  <Input
+            <div className="lv-panel">
+              <div className="lv-panel-header">
+                <span className="lv-panel-title">
+                  <BarChartOutlined style={{ marginRight: 8 }} />
+                  AI-Analyzed Patterns
+                  <span style={{ marginLeft: 8, color: 'var(--lv-text-muted)' }}>
+                    ({filteredPatterns.length}/{analyzedPatterns.length})
+                  </span>
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{
+                    fontFamily: "'IBM Plex Mono', var(--font-mono), monospace",
+                    fontSize: 10,
+                    color: 'var(--lv-text-muted)',
+                    textTransform: 'uppercase' as const,
+                    letterSpacing: '0.06em',
+                  }}>
+                    min sev:
+                  </span>
+                  <input
                     type="number"
                     min={1}
                     max={10}
-                    placeholder="Min score"
-                    value={severityFilter?.toString() || ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setSeverityFilter(val ? parseInt(val) : null);
-                    }}
-                    className="w-24"
-                    size="sm"
+                    placeholder="—"
+                    value={severityFilter ?? ''}
+                    onChange={(e) => setSeverityFilter(e.target.value ? parseInt(e.target.value) : null)}
+                    className="lv-filter-input"
                   />
                   {severityFilter !== null && (
-                    <Chip
-                      variant="flat"
+                    <Tag
+                      closable
                       onClose={() => setSeverityFilter(null)}
-                      size="sm"
+                      style={{
+                        background: 'var(--lv-green-bg)',
+                        color: 'var(--lv-green-dim)',
+                        border: '1px solid var(--lv-green-muted)',
+                        borderRadius: 2,
+                        fontFamily: "'IBM Plex Mono', var(--font-mono), monospace",
+                        fontSize: 11,
+                      }}
                     >
-                      ≥ {severityFilter}
-                    </Chip>
+                      ≥{severityFilter}
+                    </Tag>
                   )}
                 </div>
               </div>
-              <Accordion selectionMode="multiple" variant="splitted">
-                {filteredPatterns.map((pattern) => (
-                  <AccordionItem
-                    key={pattern.fingerprint}
-                    title={
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <span className="font-semibold text-gray-900">
-                          {pattern.component}
+
+              {/* Pattern rows with Ant Design Collapse */}
+              <Collapse
+                accordion={false}
+                ghost
+                expandIcon={({ isActive }) => (
+                  <CaretRightOutlined
+                    rotate={isActive ? 90 : 0}
+                    style={{ color: 'var(--lv-text-muted)', fontSize: 10 }}
+                  />
+                )}
+                items={filteredPatterns.map((pattern) => ({
+                  key: pattern.fingerprint,
+                  label: (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span style={{
+                        fontFamily: "'Space Grotesk', var(--font-heading), sans-serif",
+                        fontWeight: 600,
+                        fontSize: 13,
+                        color: 'var(--lv-text)',
+                      }}>
+                        {pattern.component}
+                      </span>
+                      <span className={`lv-level ${getLevelClass(pattern.level)}`}>
+                        {pattern.level}
+                      </span>
+                      <span className={`lv-sev ${getSevClass(pattern.severityScore)}`}>
+                        {pattern.severityScore >= 8 ? '▲' : pattern.severityScore >= 5 ? '●' : '▼'} {pattern.severityScore}/10
+                      </span>
+                      <Tooltip title="Total occurrences" placement="top">
+                        <span style={{
+                          fontFamily: "'IBM Plex Mono', var(--font-mono), monospace",
+                          fontSize: 11,
+                          color: 'var(--lv-text-muted)',
+                          background: 'var(--lv-bg)',
+                          border: '1px solid var(--lv-border)',
+                          padding: '1px 8px',
+                          borderRadius: 2,
+                        }}>
+                          {pattern.totalOccurrences}×
                         </span>
-                        <Chip
-                          color={getLevelColor(pattern.level)}
-                          variant="flat"
-                          size="sm"
-                        >
-                          {pattern.level}
-                        </Chip>
-                        <Chip
-                          color={getSeverityColor(pattern.severityScore)}
-                          variant="flat"
-                          size="sm"
-                        >
-                          Severity: {pattern.severityScore}/10
-                        </Chip>
-                        <Chip variant="flat" size="sm">
-                          {pattern.totalOccurrences}x
-                        </Chip>
-                      </div>
-                    }
-                    subtitle={pattern.humanMeaning}
-                  >
-                    <div className="space-y-4 p-4 bg-gray-50 rounded-lg">
+                      </Tooltip>
+                      <span style={{
+                        fontFamily: "'IBM Plex Mono', var(--font-mono), monospace",
+                        fontSize: 11,
+                        color: 'var(--lv-text-dim)',
+                        marginLeft: 'auto',
+                        maxWidth: 400,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap' as const,
+                      }}>
+                        {pattern.humanMeaning}
+                      </span>
+                    </div>
+                  ),
+                  children: (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                       <div>
-                        <h4 className="font-semibold text-sm text-gray-900 mb-2">
-                          Human Meaning:
-                        </h4>
-                        <p className="text-sm text-gray-700">{pattern.humanMeaning}</p>
+                        <div className="lv-detail-label">AI Interpretation</div>
+                        <p style={{
+                          fontSize: 13,
+                          lineHeight: 1.7,
+                          color: 'var(--lv-text)',
+                          margin: 0,
+                          fontFamily: "'Space Grotesk', var(--font-heading), sans-serif",
+                        }}>
+                          {pattern.humanMeaning}
+                        </p>
                       </div>
                       <div>
-                        <h4 className="font-semibold text-sm text-gray-900 mb-2">
-                          Original Technical Content:
-                        </h4>
-                        <div className="p-3 bg-white rounded border border-gray-200 font-mono text-xs text-gray-800 overflow-x-auto">
-                          {pattern.sampleContent}
+                        <div className="lv-detail-label">Raw Log Sample</div>
+                        <div className="lv-code">{pattern.sampleContent}</div>
+                      </div>
+                      <div style={{
+                        display: 'flex',
+                        gap: 32,
+                        paddingTop: 12,
+                        borderTop: '1px solid var(--lv-border)',
+                      }}>
+                        <div>
+                          <div className="lv-detail-label">Frequency</div>
+                          <span style={{
+                            fontFamily: "'Space Grotesk', var(--font-heading), sans-serif",
+                            fontWeight: 700,
+                            fontSize: 16,
+                            color: 'var(--lv-cyan)',
+                            fontVariantNumeric: 'tabular-nums',
+                          }}>
+                            {pattern.frequency.toLocaleString()}
+                          </span>
+                        </div>
+                        <div>
+                          <div className="lv-detail-label">Severity Score</div>
+                          <span style={{
+                            fontFamily: "'Space Grotesk', var(--font-heading), sans-serif",
+                            fontWeight: 700,
+                            fontSize: 16,
+                            color: pattern.severityScore >= 8 ? 'var(--lv-red)' : pattern.severityScore >= 5 ? 'var(--lv-amber)' : 'var(--lv-green-dim)',
+                            fontVariantNumeric: 'tabular-nums',
+                          }}>
+                            {pattern.severityScore} / 10
+                          </span>
                         </div>
                       </div>
-                      <div className="flex gap-4 text-sm text-gray-600">
-                        <span>
-                          <span className="font-medium">Frequency:</span> {pattern.frequency} occurrences
-                        </span>
-                        <span>
-                          <span className="font-medium">Severity Score:</span> {pattern.severityScore}/10
-                        </span>
-                      </div>
                     </div>
-                  </AccordionItem>
-                ))}
-              </Accordion>
+                  ),
+                }))}
+              />
+
               {filteredPatterns.length === 0 && (
-                <p className="text-center text-gray-500 py-8">
-                  No patterns match the severity filter. Try adjusting the filter.
-                </p>
+                <div style={{
+                  padding: '40px 20px',
+                  textAlign: 'center',
+                  fontFamily: "'IBM Plex Mono', var(--font-mono), monospace",
+                  fontSize: 12,
+                  color: 'var(--lv-text-muted)',
+                }}>
+                  No patterns match severity ≥ {severityFilter}. Adjust filter.
+                </div>
               )}
-            </Card>
+            </div>
+          )}
+
+          {/* Analyze another */}
+          {status === 'complete' && !loading && analyzedPatterns.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+              <label htmlFor="file-upload-again" className="lv-again-btn">
+                <input
+                  id="file-upload-again"
+                  type="file"
+                  accept=".csv"
+                  onChange={handleFileUpload}
+                  style={{ display: 'none' }}
+                />
+                [ ↻ ANALYZE ANOTHER ]
+              </label>
+            </div>
           )}
         </main>
       </div>
